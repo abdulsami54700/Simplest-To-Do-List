@@ -84,6 +84,8 @@ export default function EditTaskModal({ task, onClose, onSave }: Props) {
               Description
             </label>
             <textarea
+              id="edit-task-description"
+              name="description"
               maxLength={1000}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
