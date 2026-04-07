@@ -102,6 +102,8 @@ export default function EditTaskModal({ task, onClose, onSave }: Props) {
               Schedule (optional)
             </label>
             <input
+              id="edit-task-schedule"
+              name="schedule"
               type="datetime-local"
               value={dateTime}
               onChange={(e) => setDateTime(e.target.value)}

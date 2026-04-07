@@ -1,66 +1,60 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { Task, saveTasks } from "@/lib/tasks";
 
 export function useNotifications(tasks: Task[], setTasks: React.Dispatch<React.SetStateAction<Task[]>>) {
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
   const permissionAsked = useRef(false);
 
+  const checkAndNotify = useCallback(() => {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+
+    const now = Date.now();
+    let changed = false;
+
+    setTasks((prev) => {
+      const updated = prev.map((t) => {
+        if (t.scheduledTime && !t.completed && !t.notified && now >= t.scheduledTime) {
+          try {
+            new Notification("You have a task: " + t.title, {
+              body: t.description || "Task reminder",
+              icon: "/icon-192.png",
+              tag: t.id,
+            });
+          } catch {
+            // Notification may fail in some contexts
+          }
+          changed = true;
+          return { ...t, notified: true };
+        }
+        return t;
+      });
+      if (changed) saveTasks(updated);
+      return changed ? updated : prev;
+    });
+  }, [setTasks]);
+
+  // Request permission when there are scheduled tasks
   useEffect(() => {
-    const scheduled = tasks.filter((t) => t.scheduledTime && !t.completed && !t.notified);
-    if (scheduled.length === 0) return;
-
-    if (!permissionAsked.current && "Notification" in window && Notification.permission === "default") {
+    const hasScheduled = tasks.some((t) => t.scheduledTime && !t.completed && !t.notified);
+    if (
+      hasScheduled &&
+      !permissionAsked.current &&
+      "Notification" in window &&
+      Notification.permission === "default"
+    ) {
       permissionAsked.current = true;
-      Notification.requestPermission();
+      Notification.requestPermission().then(() => {
+        checkAndNotify();
+      });
     }
+  }, [tasks, checkAndNotify]);
 
-    const interval = setInterval(() => {
-      if (!("Notification" in window) || Notification.permission !== "granted") return;
+  // Set up polling interval (does not depend on tasks)
+  useEffect(() => {
+    checkAndNotify(); // Check immediately on mount
 
-      const now = Date.now();
-      let changed = false;
-
-      setTasks((prev) => {
-        const updated = prev.map((t) => {
-          if (t.scheduledTime && !t.completed && !t.notified && now >= t.scheduledTime) {
-            new Notification("You have a task: " + t.title, {
-              body: t.description || "Task reminder",
-              icon: "/icon-192.png",
-              tag: t.id,
-            });
-            changed = true;
-            return { ...t, notified: true };
-          }
-          return t;
-        });
-        if (changed) saveTasks(updated);
-        return changed ? updated : prev;
-      });
-    }, 30_000); // Check every 30 seconds for more responsive notifications
-
-    // Also check immediately on mount
-    const checkNow = () => {
-      if (!("Notification" in window) || Notification.permission !== "granted") return;
-      const now = Date.now();
-      let changed = false;
-      setTasks((prev) => {
-        const updated = prev.map((t) => {
-          if (t.scheduledTime && !t.completed && !t.notified && now >= t.scheduledTime) {
-            new Notification("You have a task: " + t.title, {
-              body: t.description || "Task reminder",
-              icon: "/icon-192.png",
-              tag: t.id,
-            });
-            changed = true;
-            return { ...t, notified: true };
-          }
-          return t;
-        });
-        if (changed) saveTasks(updated);
-        return changed ? updated : prev;
-      });
-    };
-    checkNow();
-
+    const interval = setInterval(checkAndNotify, 30_000);
     return () => clearInterval(interval);
-  }, [tasks, setTasks]);
+  }, [checkAndNotify]);
 }

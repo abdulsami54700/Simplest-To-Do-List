@@ -1,3 +1,4 @@
+import { forwardRef } from "react";
 import { ListTodo, History } from "lucide-react";
 
 type Tab = "tasks" | "history";
@@ -8,9 +9,9 @@ interface Props {
   historyCount: number;
 }
 
-export default function BottomNav({ active, onChange, historyCount }: Props) {
+const BottomNav = forwardRef<HTMLElement, Props>(function BottomNav({ active, onChange, historyCount }, ref) {
   return (
-    <nav className="fixed bottom-0 left-0 right-0 bg-card/95 backdrop-blur-md border-t border-border z-40 safe-area-pb">
+    <nav ref={ref} className="fixed bottom-0 left-0 right-0 bg-card/95 backdrop-blur-md border-t border-border z-40 safe-area-pb">
       <div className="max-w-md mx-auto flex">
         <button
           onClick={() => onChange("tasks")}
@@ -48,4 +49,6 @@ export default function BottomNav({ active, onChange, historyCount }: Props) {
       </div>
     </nav>
   );
-}
+});
+
+export default BottomNav;
