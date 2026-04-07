@@ -65,6 +65,8 @@ export default function EditTaskModal({ task, onClose, onSave }: Props) {
               Title *
             </label>
             <input
+              id="edit-task-title"
+              name="title"
               type="text"
               maxLength={50}
               value={title}
