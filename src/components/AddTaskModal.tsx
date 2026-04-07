@@ -73,6 +73,8 @@ export default function AddTaskModal({ open, onClose, onSave }: Props) {
               Description
             </label>
             <textarea
+              id="add-task-description"
+              name="description"
               maxLength={1000}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
