@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { Task, saveTasks } from "@/lib/tasks";
 import { requestFCMToken, onForegroundMessage } from "@/lib/firebase";
+import { storeFCMToken, syncAllScheduledTasks } from "@/lib/supabaseSync";
 
 export function useNotifications(tasks: Task[], setTasks: React.Dispatch<React.SetStateAction<Task[]>>) {
   const permissionAsked = useRef(false);
@@ -11,7 +12,11 @@ export function useNotifications(tasks: Task[], setTasks: React.Dispatch<React.S
     const hasScheduled = tasks.some((t) => t.scheduledTime && !t.completed && !t.notified);
     if (hasScheduled && !fcmInitialized.current) {
       fcmInitialized.current = true;
-      requestFCMToken().catch(console.error);
+      requestFCMToken().then((token) => {
+        if (token) storeFCMToken(token);
+      }).catch(console.error);
+      // Sync scheduled tasks to backend
+      syncAllScheduledTasks(tasks).catch(console.error);
     }
   }, [tasks]);
 
