@@ -39,11 +39,6 @@ export default function BottomNav({ active, onChange, historyCount }: Props) {
           {active === "history" && (
             <div className="w-1 h-1 rounded-full bg-primary" />
           )}
-          {historyCount > 0 && (
-            <span className="absolute top-1.5 right-1/4 min-w-[18px] h-[18px] rounded-full bg-primary text-primary-foreground text-[10px] flex items-center justify-center font-bold px-1">
-              {historyCount > 99 ? "99+" : historyCount}
-            </span>
-          )}
         </button>
       </div>
     </nav>

@@ -1,10 +1,35 @@
 import { useEffect, useRef, useCallback } from "react";
 import { Task, saveTasks } from "@/lib/tasks";
+import { requestFCMToken, onForegroundMessage } from "@/lib/firebase";
 
 export function useNotifications(tasks: Task[], setTasks: React.Dispatch<React.SetStateAction<Task[]>>) {
-  const tasksRef = useRef(tasks);
-  tasksRef.current = tasks;
   const permissionAsked = useRef(false);
+  const fcmInitialized = useRef(false);
+
+  // Initialize FCM when there are scheduled tasks
+  useEffect(() => {
+    const hasScheduled = tasks.some((t) => t.scheduledTime && !t.completed && !t.notified);
+    if (hasScheduled && !fcmInitialized.current) {
+      fcmInitialized.current = true;
+      requestFCMToken().catch(console.error);
+    }
+  }, [tasks]);
+
+  // Listen for foreground FCM messages
+  useEffect(() => {
+    const unsubscribe = onForegroundMessage((payload) => {
+      const title = payload.notification?.title || "Task Reminder";
+      const body = payload.notification?.body || "You have a task due!";
+      try {
+        new Notification(title, { body, icon: "/icon-192.png" });
+      } catch {
+        // fallback: already shown by FCM
+      }
+    });
+    return () => {
+      if (typeof unsubscribe === "function") unsubscribe();
+    };
+  }, []);
 
   const checkAndNotify = useCallback(() => {
     if (!("Notification" in window) || Notification.permission !== "granted") return;
@@ -50,10 +75,9 @@ export function useNotifications(tasks: Task[], setTasks: React.Dispatch<React.S
     }
   }, [tasks, checkAndNotify]);
 
-  // Set up polling interval (does not depend on tasks)
+  // Poll every 30 seconds
   useEffect(() => {
-    checkAndNotify(); // Check immediately on mount
-
+    checkAndNotify();
     const interval = setInterval(checkAndNotify, 30_000);
     return () => clearInterval(interval);
   }, [checkAndNotify]);
