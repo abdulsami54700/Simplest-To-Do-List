@@ -14,7 +14,54 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      fcm_tokens: {
+        Row: {
+          created_at: string
+          id: string
+          token: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          token: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          token?: string
+        }
+        Relationships: []
+      }
+      scheduled_tasks: {
+        Row: {
+          completed: boolean
+          created_at: string
+          id: string
+          notified: boolean
+          scheduled_time: number
+          task_id: string
+          title: string
+        }
+        Insert: {
+          completed?: boolean
+          created_at?: string
+          id?: string
+          notified?: boolean
+          scheduled_time: number
+          task_id: string
+          title: string
+        }
+        Update: {
+          completed?: boolean
+          created_at?: string
+          id?: string
+          notified?: boolean
+          scheduled_time?: number
+          task_id?: string
+          title?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
