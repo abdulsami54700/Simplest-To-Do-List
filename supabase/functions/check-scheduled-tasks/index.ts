@@ -18,7 +18,6 @@ Deno.serve(async (req) => {
 
     const serviceAccountJson = Deno.env.get("FIREBASE_SERVICE_ACCOUNT");
     if (!serviceAccountJson) {
-      console.error("Missing FIREBASE_SERVICE_ACCOUNT secret");
       return new Response(JSON.stringify({ error: "Missing FIREBASE_SERVICE_ACCOUNT" }), {
         status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -26,56 +25,47 @@ Deno.serve(async (req) => {
 
     const serviceAccount = JSON.parse(serviceAccountJson);
     const now = Date.now();
-    console.log(`[check-scheduled-tasks] Running at ${now} (${new Date(now).toISOString()})`);
+    console.log(`[check] Running at ${new Date(now).toISOString()}`);
 
-    // Find due tasks that haven't been notified
-    const { data: dueTasks, error: taskError } = await supabase
+    // ATOMIC CLAIM: update notified=true and return only the rows we claimed
+    // This prevents duplicates even if cron fires multiple times
+    const { data: claimed, error: claimError } = await supabase
       .from("scheduled_tasks")
-      .select("*")
+      .update({ notified: true })
       .eq("completed", false)
       .eq("notified", false)
-      .lte("scheduled_time", now);
+      .lte("scheduled_time", now)
+      .select("*");
 
-    if (taskError) {
-      console.error("Task query error:", taskError);
-      return new Response(JSON.stringify({ error: taskError.message }), {
+    if (claimError) {
+      console.error("Claim error:", claimError);
+      return new Response(JSON.stringify({ error: claimError.message }), {
         status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    console.log(`[check-scheduled-tasks] Found ${dueTasks?.length ?? 0} due tasks`);
+    console.log(`[check] Claimed ${claimed?.length ?? 0} tasks`);
 
-    if (!dueTasks || dueTasks.length === 0) {
+    if (!claimed || claimed.length === 0) {
       return new Response(JSON.stringify({ message: "No due tasks", checked_at: now }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Get all FCM tokens
-    const { data: tokens, error: tokenError } = await supabase
-      .from("fcm_tokens")
-      .select("token");
-
-    if (tokenError || !tokens || tokens.length === 0) {
-      console.log("No FCM tokens found", tokenError);
-      return new Response(JSON.stringify({ error: "No FCM tokens found" }), {
-        status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    // Get FCM tokens
+    const { data: tokens } = await supabase.from("fcm_tokens").select("token");
+    if (!tokens || tokens.length === 0) {
+      console.log("No FCM tokens");
+      return new Response(JSON.stringify({ message: "No tokens", tasks_claimed: claimed.length }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    console.log(`[check-scheduled-tasks] Found ${tokens.length} FCM tokens`);
-
-    // Get OAuth2 access token for FCM v1 API
     const accessToken = await getAccessToken(serviceAccount);
     const projectId = serviceAccount.project_id;
-    console.log(`[check-scheduled-tasks] Got access token for project ${projectId}`);
-
     let sent = 0;
-    const errors: string[] = [];
 
-    for (const task of dueTasks) {
-      console.log(`[check-scheduled-tasks] Processing task: ${task.task_id} - ${task.title} (scheduled: ${task.scheduled_time})`);
-      
+    for (const task of claimed) {
       for (const { token } of tokens) {
         try {
           const res = await fetch(
@@ -98,6 +88,7 @@ Deno.serve(async (req) => {
                       title: "Task Reminder",
                       body: `You have a task: ${task.title}`,
                       icon: "/icon-192.png",
+                      requireInteraction: true,
                     },
                   },
                 },
@@ -107,105 +98,67 @@ Deno.serve(async (req) => {
 
           if (res.ok) {
             sent++;
-            console.log(`[check-scheduled-tasks] Sent notification for task ${task.task_id}`);
+            console.log(`[check] Sent for task ${task.task_id}`);
           } else {
             const errBody = await res.text();
-            console.error(`[check-scheduled-tasks] FCM error for token ${token.slice(0, 10)}...: ${errBody}`);
-            errors.push(`Token ${token.slice(0, 10)}...: ${errBody}`);
+            console.error(`[check] FCM error: ${errBody}`);
+            // Remove invalid tokens
             if (res.status === 404 || res.status === 400) {
               await supabase.from("fcm_tokens").delete().eq("token", token);
             }
           }
         } catch (e) {
-          console.error(`[check-scheduled-tasks] Send error:`, e);
-          errors.push(`Send error: ${(e as Error).message}`);
+          console.error(`[check] Send error:`, (e as Error).message);
         }
-      }
-
-      // Mark task as notified
-      const { error: updateError } = await supabase
-        .from("scheduled_tasks")
-        .update({ notified: true })
-        .eq("task_id", task.task_id);
-      
-      if (updateError) {
-        console.error(`[check-scheduled-tasks] Failed to mark notified:`, updateError);
-      } else {
-        console.log(`[check-scheduled-tasks] Marked task ${task.task_id} as notified`);
       }
     }
 
-    const result = { sent, tasks_processed: dueTasks.length, errors };
-    console.log(`[check-scheduled-tasks] Result:`, JSON.stringify(result));
-
-    return new Response(JSON.stringify(result), {
+    return new Response(JSON.stringify({ sent, tasks_claimed: claimed.length }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
-    console.error("[check-scheduled-tasks] Unexpected error:", e);
+    console.error("[check] Error:", e);
     return new Response(JSON.stringify({ error: (e as Error).message }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
 
-// Generate OAuth2 access token from service account using JWT
-async function getAccessToken(serviceAccount: {
-  client_email: string;
-  private_key: string;
-}): Promise<string> {
+async function getAccessToken(sa: { client_email: string; private_key: string }): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "RS256", typ: "JWT" };
   const payload = {
-    iss: serviceAccount.client_email,
+    iss: sa.client_email,
     scope: "https://www.googleapis.com/auth/firebase.messaging",
     aud: "https://oauth2.googleapis.com/token",
     iat: now,
     exp: now + 3600,
   };
 
-  const encoder = new TextEncoder();
-  const headerB64 = base64url(encoder.encode(JSON.stringify(header)));
-  const payloadB64 = base64url(encoder.encode(JSON.stringify(payload)));
-  const unsignedToken = `${headerB64}.${payloadB64}`;
+  const enc = new TextEncoder();
+  const hB64 = b64url(enc.encode(JSON.stringify(header)));
+  const pB64 = b64url(enc.encode(JSON.stringify(payload)));
+  const unsigned = `${hB64}.${pB64}`;
 
-  const pemContents = serviceAccount.private_key
-    .replace(/-----BEGIN PRIVATE KEY-----/, "")
-    .replace(/-----END PRIVATE KEY-----/, "")
-    .replace(/\n/g, "");
-  const binaryKey = Uint8Array.from(atob(pemContents), (c) => c.charCodeAt(0));
+  const pem = sa.private_key.replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\n/g, "");
+  const binaryKey = Uint8Array.from(atob(pem), (c) => c.charCodeAt(0));
 
-  const key = await crypto.subtle.importKey(
-    "pkcs8",
-    binaryKey,
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
+  const key = await crypto.subtle.importKey("pkcs8", binaryKey, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, enc.encode(unsigned));
+  const jwt = `${unsigned}.${b64url(new Uint8Array(sig))}`;
 
-  const signature = await crypto.subtle.sign(
-    "RSASSA-PKCS1-v1_5",
-    key,
-    encoder.encode(unsignedToken)
-  );
-
-  const signatureB64 = base64url(new Uint8Array(signature));
-  const jwt = `${unsignedToken}.${signatureB64}`;
-
-  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+  const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`,
   });
 
-  const tokenData = await tokenRes.json();
-  if (!tokenData.access_token) {
-    throw new Error(`Failed to get access token: ${JSON.stringify(tokenData)}`);
-  }
-  return tokenData.access_token;
+  const data = await res.json();
+  if (!data.access_token) throw new Error(`Token failed: ${JSON.stringify(data)}`);
+  return data.access_token;
 }
 
-function base64url(bytes: Uint8Array): string {
-  const binStr = Array.from(bytes, (b) => String.fromCharCode(b)).join("");
-  return btoa(binStr).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+function b64url(bytes: Uint8Array): string {
+  return btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join(""))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
